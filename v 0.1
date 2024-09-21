@@ -1,0 +1,106 @@
+import cv2
+import mediapipe as mp
+import numpy as np
+import tensorflow as tf
+from tensorflow.keras import layers, models
+
+# Initialize the video capture for the real-time webcam feed and the pre-recorded video
+cap = cv2.VideoCapture('squat1Data.mp4')  # Real-time webcam feed
+cap2 = cv2.VideoCapture('squat1Data.mp4')  # Pre-recorded video
+
+# Initialize Mediapipe Pose and Drawing utilities
+pose = mp.solutions.pose
+pose_o = pose.Pose()
+drawing = mp.solutions.drawing_utils
+
+# Define body parts with corresponding landmarks
+body_parts = {
+    'Left Arm': [11, 13, 15],  # Shoulder, Elbow, Wrist
+    'Right Arm': [12, 14, 16],  # Shoulder, Elbow, Wrist
+    'Left Leg': [23, 25, 27],  # Hip, Knee, Ankle
+    'Right Leg': [24, 26, 28],  # Hip, Knee, Ankle
+    'Torso': [11, 12, 23, 24]  # Shoulders and Hips
+}
+
+
+def inFrame(landmarks):
+    key_points = [11, 12, 23 ]
+    for point in key_points:
+        if landmarks[point].visibility <= 0.7:
+            return False
+    return True
+
+
+def compare_landmarks(landmarks1, landmarks2, part_indices):
+    differences = []
+    for i in part_indices:
+        x_diff = abs(landmarks1[i].x - landmarks2[i].x)
+        y_diff = abs(landmarks1[i].y - landmarks2[i].y)
+        z_diff = abs(landmarks1[i].z - landmarks2[i].z)
+        differences.append(np.sqrt(x_diff ** 2 + y_diff ** 2 + z_diff ** 2))
+    return np.mean(differences)
+
+
+def generate_feedback(finalres, videofinalRes):
+    feedback = []
+    threshold = 0.1  # Define threshold for feedback
+
+    for part, indices in body_parts.items():
+        diff = compare_landmarks(finalres, videofinalRes, indices)
+        if diff > threshold:
+            feedback.append(f"Improve {part} movement. Difference: {diff:.2f}")
+
+    if not feedback:
+        feedback.append("Great job! Your movements closely match the video.")
+
+    return feedback
+
+
+# Define the new window size (width, height)
+resize_width = 640
+resize_height = 360
+
+while True:
+    # Read frames from both the webcam and the pre-recorded video
+    ret, frm = cap.read()  # Real-time webcam frame
+    ret2, frm2 = cap2.read()  # Pre-recorded video frame
+
+    if not ret or not ret2:
+        break
+
+    # Resize the frames to the desired window size
+    frm = cv2.resize(frm, (resize_width, resize_height))
+    frm2 = cv2.resize(frm2, (resize_width, resize_height))
+
+    # Process the frames for pose landmarks detection
+    res = pose_o.process(cv2.cvtColor(frm, cv2.COLOR_BGR2RGB))
+    res2 = pose_o.process(cv2.cvtColor(frm2, cv2.COLOR_BGR2RGB))
+
+    # Only draw landmarks if they are detected
+    if res.pose_landmarks:
+        drawing.draw_landmarks(frm, res.pose_landmarks, pose.POSE_CONNECTIONS)
+
+    if res2.pose_landmarks:
+        drawing.draw_landmarks(frm2, res2.pose_landmarks, pose.POSE_CONNECTIONS)
+
+    if res.pose_landmarks and res2.pose_landmarks:
+        finalres = res.pose_landmarks.landmark
+        videofinalRes = res2.pose_landmarks.landmark
+
+        if inFrame(videofinalRes) and inFrame(finalres):
+            feedback = generate_feedback(finalres, videofinalRes)
+            for msg in feedback:
+                print(msg)
+
+    # Display both frames
+    cv2.imshow('Pre-recorded Video', frm2)
+    cv2.imshow('Webcam', frm)
+
+    # Exit on pressing the 'Esc' key
+    if cv2.waitKey(1) == 27:
+        break
+
+# Release the video captures and destroy all windows
+cap.release()
+cap2.release()
+cv2.destroyAllWindows()
