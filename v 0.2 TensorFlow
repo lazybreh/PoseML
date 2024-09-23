@@ -1,0 +1,96 @@
+import cv2
+import numpy as np
+import tensorflow as tf
+from tensorflow.keras import layers, models
+import os
+
+# Load frames from a video
+def loadFrame(path, frmLim=500, frmsize=(64, 64)):
+    cap = cv2.VideoCapture(path)
+    frames = []
+    count = 0
+    while cap.isOpened() and count < frmLim:
+        read, frame = cap.read()
+        if not read:
+            break
+        frame = cv2.resize(frame, frmsize)  # Resize frame
+        frame = frame / 255.0  # Normalize frame
+        frames.append(frame)
+        count += 1
+    cap.release()
+    return np.array(frames)  # Return frames as a NumPy array
+
+# Build a CNN model for feature extraction
+def buildCNN(input_shape):
+    model = models.Sequential([
+        layers.Conv2D(32, (3, 3), activation='relu', input_shape=input_shape),
+        layers.MaxPooling2D((2, 2)),
+        layers.Conv2D(64, (3, 3), activation='relu'),
+        layers.MaxPooling2D((2, 2)),
+        layers.Conv2D(128, (3, 3), activation='relu'),
+        layers.MaxPooling2D((2, 2)),
+        layers.Flatten(),
+        layers.Dense(128, activation='relu'),
+        layers.Dense(2, activation='softmax')  # Output for binary classification
+    ])
+
+    model.compile(optimizer='adam',
+                  loss='categorical_crossentropy',
+                  metrics=['accuracy'])
+    return model
+
+# Compare multiple videos with a reference video
+def compareVids(vidPaths, referenceVidPath):
+    # Load frames from the reference video
+    SimilarityScores = []
+    reference_frames = loadFrame(referenceVidPath)
+
+    if reference_frames.size == 0:
+        print(f"Error: Could not load reference video {referenceVidPath}")
+        return
+
+    # Get input shape from reference video frames
+    input_shape = reference_frames.shape[1:]  # Exclude batch size
+
+    # Build the CNN model based on the reference video frame shape
+    cnnModel = buildCNN(input_shape)
+
+    # Iterate over the other videos
+    for vidPath in vidPaths:
+        print(f"Comparing {referenceVidPath} to {vidPath}...")
+
+        # Load frames from the current video
+        video_frames = loadFrame(vidPath)
+
+        if video_frames.size == 0:
+            print(f"Error: Could not load video {vidPath}")
+            continue
+
+        combined_frames = np.vstack([reference_frames, video_frames])
+
+        # Create one-hot encoded labels
+        labels = np.hstack([np.zeros(len(reference_frames)), np.ones(len(video_frames))])
+        labels = tf.keras.utils.to_categorical(labels, num_classes=2)
+
+        cnnModel.fit(combined_frames, labels, epochs=10, batch_size=32)
+
+        new_video_features = cnnModel.predict(video_frames)
+        similarity_score = np.mean(new_video_features[:, 1])  # Use the probability of the positive class
+        SimilarityScores.append(similarity_score)
+
+    print("Score closer to 0 -> similarity, score closer to 1 -> different")
+    print(SimilarityScores)
+
+# List all videos in the specified folder
+def get_video_files_from_folder(folderPath):
+    video_extensions = ('.mp4', '.mov', '.avi', '.mkv')  # Add more extensions as needed
+    return [os.path.join(folderPath, file) for file in os.listdir(folderPath) if file.lower().endswith(video_extensions)]
+
+folderPath = 'C:\\Users\\mithu\\Downloads\\archive\\russian twist'
+video_paths = get_video_files_from_folder(folderPath)
+
+# The reference video
+reference_video_path = 'squat1Data.mp4'
+
+# Run the comparison
+compareVids(video_paths, reference_video_path)
