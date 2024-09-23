@@ -1,0 +1,120 @@
+import cv2
+import numpy as np
+import tensorflow as tf
+from tensorflow.keras import layers, models
+import os
+
+
+# Load frames from a video
+def loadFrame(path, frmLim=500, frmsize=(64, 64)):
+    cap = cv2.VideoCapture(path)
+    frames = []
+    count = 0
+    while cap.isOpened() and count < frmLim:
+        read, frame = cap.read()
+        if not read:
+            break
+        frame = cv2.resize(frame, frmsize)  # Resize frame
+        frame = frame / 255.0  # Normalize frame
+        frames.append(frame)
+        count += 1
+    cap.release()
+    return np.array(frames)  # Return frames as a NumPy array
+
+
+# Build CNN-LSTM model for video sequence classification with similarity
+def buildCNN_LSTM(input_shape, timesteps):
+    model = models.Sequential([
+        layers.TimeDistributed(layers.Conv2D(32, (3, 3), activation='relu'), input_shape=(timesteps, *input_shape)),
+        layers.TimeDistributed(layers.MaxPooling2D((2, 2))),
+        layers.TimeDistributed(layers.Conv2D(64, (3, 3), activation='relu')),
+        layers.TimeDistributed(layers.MaxPooling2D((2, 2))),
+        layers.TimeDistributed(layers.Conv2D(128, (3, 3), activation='relu')),
+        layers.TimeDistributed(layers.MaxPooling2D((2, 2))),
+        layers.TimeDistributed(layers.Flatten()),
+        layers.LSTM(64),  # LSTM to capture temporal features
+        layers.Dense(128, activation='relu'),
+        layers.Dense(2, activation='softmax')  # Binary classification (similar or different)
+    ])
+
+    model.compile(optimizer='adam',
+                  loss='categorical_crossentropy',
+                  metrics=['accuracy'])
+    return model
+
+
+# Compare multiple videos with a reference video
+def compareVids(vidPaths, referenceVidPath, timesteps=10):
+    # Load frames from the reference video
+    SimilarityScores = []
+    reference_frames = loadFrame(referenceVidPath)
+
+    if reference_frames.size == 0:
+        print(f"Error: Could not load reference video {referenceVidPath}")
+        return
+
+    # Prepare reference frames in sequences
+    ref_sequences = createSequences(reference_frames, timesteps)
+
+    # Get input shape from reference video frames
+    input_shape = reference_frames.shape[1:]  # Exclude batch size
+
+    # Build the CNN-LSTM model based on the reference video frame shape
+    cnnLstmModel = buildCNN_LSTM(input_shape, timesteps)
+
+    # Iterate over the other videos
+    for vidPath in vidPaths:
+        print(f"Comparing {referenceVidPath} to {vidPath}...")
+
+        # Load frames from the current video
+        video_frames = loadFrame(vidPath)
+
+        if video_frames.size == 0:
+            print(f"Error: Could not load video {vidPath}")
+            continue
+
+        video_sequences = createSequences(video_frames, timesteps)
+
+        # Create one-hot encoded labels for binary classification (reference = 0, similar/different label)
+        ref_labels = np.zeros(len(ref_sequences))  # Reference video labeled as 'similar'
+        vid_labels = np.ones(len(video_sequences))  # Other videos labeled as 'different'
+        combined_labels = np.hstack([ref_labels, vid_labels])
+        combined_labels = tf.keras.utils.to_categorical(combined_labels, num_classes=2)
+
+        combined_sequences = np.vstack([ref_sequences, video_sequences])
+
+        cnnLstmModel.fit(combined_sequences, combined_labels, epochs=10, batch_size=32)
+
+        # Predict similarity scores
+        new_video_features = cnnLstmModel.predict(video_sequences)
+        similarity_score = np.mean(new_video_features[:, 1])  # Use the probability of the positive class
+        SimilarityScores.append(similarity_score)
+
+    print("Score closer to 0 -> similarity, score closer to 1 -> different")
+    print(SimilarityScores)
+
+
+# Helper function to split frames into sequences of 'timesteps'
+def createSequences(frames, timesteps):
+    sequences = []
+    for i in range(0, len(frames) - timesteps + 1, timesteps):
+        sequences.append(frames[i:i + timesteps])
+    return np.array(sequences)
+
+
+# List all videos in the specified folder
+def get_video_files_from_folder(folderPath):
+    video_extensions = ('.mp4', '.mov', '.avi', '.mkv')  # Add more extensions as needed
+    return [os.path.join(folderPath, file) for file in os.listdir(folderPath) if
+            file.lower().endswith(video_extensions)]
+
+
+# Specify folder containing videos
+folderPath = 'C:\\Users\\mithu\\Downloads\\archive\\russian twist'
+video_paths = get_video_files_from_folder(folderPath)
+
+# The reference video
+reference_video_path = 'russian twist_6.mp4'
+
+# Run the comparison
+compareVids(video_paths, reference_video_path)
